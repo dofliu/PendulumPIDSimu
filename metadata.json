@@ -1,0 +1,6 @@
+{
+  "name": "倒單擺 PID 模擬器",
+  "description": "一個網頁應用程式，用於模擬二階倒單擺系統的 PID 控制。使用者可以調整系統和 PID 參數來觀察模擬效果，包括時域響應曲線和倒單擺的視覺動畫。",
+  "requestFramePermissions": [],
+  "prompt": ""
+}
