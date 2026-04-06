@@ -4,6 +4,7 @@ import { SystemParams, PidParams, SimulationControl, Equations, DisturbanceParam
 import { GRAVITY, DEFAULT_DISTURBANCE_PARAMS, DEFAULT_SINUSOID_PARAMS, DEFAULT_DESIRED_ZETA, DEFAULT_DESIRED_TS, POLE_PLACEMENT_THIRD_POLE_ALPHA, SIMULATION_MAX_TIME, ZN_C1_KU, ZN_C2_TU } from './constants';
 import ControlPanel from './components/ControlPanel';
 import SystemInfoDisplay from './components/SystemInfoDisplay';
+import PoleZeroPlot from './components/PoleZeroPlot';
 import SimulationChart from './components/SimulationChart';
 import PendulumAnimation from './components/PendulumAnimation';
 import PerformanceMetricsDisplay from './components/PerformanceMetricsDisplay';
@@ -227,24 +228,35 @@ const App: React.FC = () => {
     const l_val = Math.max(0.001, l);
     const b_val = Math.max(0, b);
 
+    // Helper to format polynomial terms
+    const formatTerm = (val: number, term: string, isFirst: boolean = false) => {
+      if (Math.abs(val) < 1e-6) return "";
+      const sign = val > 0 ? (isFirst ? "" : " + ") : " - ";
+      const absVal = Math.abs(val).toFixed(3);
+      return `${sign}${absVal}${term}`;
+    };
+
     const I_val = m_val * l_val * l_val;
-    const I_str = `${m_val.toFixed(2)}*${l_val.toFixed(2)}²`;
     const mgl_val = m_val * GRAVITY * l_val;
 
-    const timeDomain = `${I_str} θ''(t) + ${b_val.toFixed(3)} θ'(t) - ${mgl_val.toFixed(3)} θ(t) = τ_control(t)`;
+    // LaTeX formatted equations
+    const timeDomain = `${I_val.toFixed(3)} \\ddot{\\theta}(t) + ${b_val.toFixed(3)} \\dot{\\theta}(t) - ${mgl_val.toFixed(3)} \\theta(t) = \\tau_{control}(t)`;
     
-    const plantDenominator = `${I_val.toFixed(3)}s² + ${b_val.toFixed(3)}s - ${mgl_val.toFixed(3)}`;
-    const plantTransferFunction = `1 / (${plantDenominator})`;
+    const plantDenominator = `${I_val.toFixed(3)}s^2${formatTerm(b_val, "s")}${formatTerm(-mgl_val, "")}`;
+    const plantTransferFunction = `G_p(s) = \\frac{1}{${plantDenominator}}`;
 
-    const controllerTransferFunctionNumerator = `${kd.toFixed(3)}s² + ${kp.toFixed(3)}s + ${ki.toFixed(3)}`;
-    const controllerTransferFunction = `(${controllerTransferFunctionNumerator}) / s`;
+    const controllerTransferFunctionNumerator = `${kd.toFixed(3)}s^2${formatTerm(kp, "s")}${formatTerm(ki, "")}`;
+    const controllerTransferFunction = `G_c(s) = \\frac{${controllerTransferFunctionNumerator}}{s}`;
     
     const clNumerator = controllerTransferFunctionNumerator; 
-    const clDenominatorP1 = `${I_val.toFixed(3)}s³`; 
-    const clDenominatorP2 = `${(b_val + kd).toFixed(3)}s²`; 
-    const clDenominatorP3 = `${(kp - mgl_val).toFixed(3)}s`; 
-    const clDenominatorP4 = `${ki.toFixed(3)}`;
-    const closedLoopTransferFunction = `${clNumerator} / (${clDenominatorP1} + ${clDenominatorP2} + ${clDenominatorP3} + ${clDenominatorP4})`;
+    
+    const d3 = I_val;
+    const d2 = b_val + kd;
+    const d1 = kp - mgl_val;
+    const d0 = ki;
+
+    const clDenominator = `${d3.toFixed(3)}s^3${formatTerm(d2, "s^2")}${formatTerm(d1, "s")}${formatTerm(d0, "")}`;
+    const closedLoopTransferFunction = `T(s) = \\frac{${clNumerator}}{${clDenominator}}`;
     
     let openLoopWn_val: number | undefined = undefined;
     let openLoopZeta_val: number | undefined = undefined;
@@ -275,6 +287,16 @@ const App: React.FC = () => {
       kp - mgl_val,
       ki
     );
+
+    // Calculate desired roots for visualization
+    const sigma = 4.0 / desiredTs;
+    const wn_desired = sigma / desiredZeta;
+    const wd = wn_desired * Math.sqrt(Math.max(0, 1 - desiredZeta * desiredZeta));
+    const desiredRoots_val: ComplexRoot[] = [
+      { real: -sigma, imag: wd },
+      { real: -sigma, imag: -wd },
+      { real: -POLE_PLACEMENT_THIRD_POLE_ALPHA * sigma, imag: 0 }
+    ];
     
     return { 
       timeDomain, 
@@ -285,19 +307,24 @@ const App: React.FC = () => {
       openLoopZeta: openLoopZeta_val,
       openLoopRoots: openLoopRoots_val,
       closedLoopRoots: closedLoopRoots_val,
+      desiredRoots: desiredRoots_val,
     };
-  }, [systemParams, pidParams]);
+  }, [systemParams, pidParams, desiredZeta, desiredTs]);
 
   return (
-    <div className="min-h-screen bg-gray-100 p-4 md:p-8">
-      <header className="mb-8 text-center">
-        <h1 className="text-3xl md:text-4xl font-bold text-gray-800">倒單擺 PID 控制模擬器</h1>
-        <p className="text-md text-gray-600 mt-1">探索 PID 控制在二階倒單擺系統上的應用、追蹤不同參考輸入，並觀察外部干擾的影響。</p>
+    <div className="min-h-screen bg-gray-50 p-2 md:p-4">
+      <header className="mb-4 text-center">
+        <h1 className="text-2xl font-black text-gray-900 tracking-tight flex items-center justify-center gap-2">
+          <span className="p-1.5 bg-blue-600 text-white rounded-lg shadow-lg">⚖️</span>
+          倒單擺 PID 控制系統模擬器
+        </h1>
+        <p className="text-gray-500 text-xs mt-1 font-medium">線性化模型分析與即時根軌跡觀察</p>
       </header>
 
-      <div className="flex flex-col lg:flex-row gap-6">
-        <div className="lg:w-1/3">
-          <ControlPanel
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 max-w-[1600px] mx-auto">
+        {/* Left Column: Control Panel */}
+        <div className="lg:col-span-4 xl:col-span-3">
+          <ControlPanel 
             systemParams={systemParams}
             pidParams={pidParams}
             simulationControl={simulationControl}
@@ -322,18 +349,42 @@ const App: React.FC = () => {
           />
         </div>
 
-        <div className="lg:w-2/3 space-y-6">
-          <SystemInfoDisplay equations={equations} />
-          <SimulationChart 
-            liveSimulationData={liveSimulationData} 
-            comparisonRuns={comparisonRuns}
-            isRunning={isRunning}
-          />
-          <PerformanceMetricsDisplay metrics={performanceMetrics} />
-          <PendulumAnimation angle={currentAngle} pidContributions={currentPidContributions} />
+        {/* Right Column: Visualizations and Info */}
+        <div className="lg:col-span-8 xl:col-span-9 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+            {/* Middle-Left: S-Plane */}
+            <div className="md:col-span-4 xl:col-span-5 h-full">
+              <PoleZeroPlot 
+                openLoopRoots={equations.openLoopRoots} 
+                closedLoopRoots={equations.closedLoopRoots} 
+                desiredRoots={equations.desiredRoots}
+                zeta={desiredZeta}
+              />
+            </div>
+            
+            {/* Middle-Center: Animation */}
+            <div className="md:col-span-4 xl:col-span-3 h-full">
+              <PendulumAnimation angle={currentAngle} pidContributions={currentPidContributions} />
+            </div>
+            
+            {/* Middle-Right: Chart + Metrics */}
+            <div className="md:col-span-4 xl:col-span-4 space-y-4">
+              <SimulationChart 
+                liveSimulationData={liveSimulationData} 
+                comparisonRuns={comparisonRuns}
+                isRunning={isRunning}
+              />
+              <PerformanceMetricsDisplay metrics={performanceMetrics} />
+            </div>
+          </div>
+
+          <div className="w-full">
+            <SystemInfoDisplay equations={equations} />
+          </div>
         </div>
       </div>
-      <footer className="text-center mt-12 py-4 text-sm text-gray-500 border-t border-gray-300">
+
+      <footer className="text-center mt-8 py-4 text-[10px] text-gray-400 border-t border-gray-200">
         <p>國立勤益科技大學 智慧自動化工程系 劉瑞弘老師研究室 -- 倒單擺模擬器 &copy; {new Date().getFullYear()}</p>
       </footer>
     </div>

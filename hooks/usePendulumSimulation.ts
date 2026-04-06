@@ -49,10 +49,10 @@ export const usePendulumSimulation = ({ systemParams, pidParams, simulationContr
   useEffect(() => {
     if (isRunning) {
       if (intervalIdRef.current) {
-        clearInterval(intervalIdRef.current);
+        window.clearInterval(intervalIdRef.current);
       }
 
-      intervalIdRef.current = setInterval(() => {
+      intervalIdRef.current = window.setInterval(() => {
         if (timeRef.current >= SIMULATION_MAX_TIME) {
           setIsRunning(false); 
           return;
@@ -138,14 +138,14 @@ export const usePendulumSimulation = ({ systemParams, pidParams, simulationContr
       }, SIMULATION_DT * 1000);
     } else {
       if (intervalIdRef.current) {
-        clearInterval(intervalIdRef.current);
+        window.clearInterval(intervalIdRef.current);
         intervalIdRef.current = null;
       }
     }
 
     return () => {
       if (intervalIdRef.current) {
-        clearInterval(intervalIdRef.current);
+        window.clearInterval(intervalIdRef.current);
         intervalIdRef.current = null;
       }
     };

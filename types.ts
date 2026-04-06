@@ -62,6 +62,7 @@ export interface Equations {
   openLoopZeta?: number; // Characteristic damping ratio
   openLoopRoots?: ComplexRoot[];
   closedLoopRoots?: ComplexRoot[];
+  desiredRoots?: ComplexRoot[];
 }
 
 export interface PerformanceMetrics {
