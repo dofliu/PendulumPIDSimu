@@ -8,9 +8,11 @@ interface PoleZeroPlotProps {
   closedLoopRoots?: ComplexRoot[];
   desiredRoots?: ComplexRoot[];
   zeta?: number;
+  m: number;
+  l: number;
 }
 
-const PoleZeroPlot: React.FC<PoleZeroPlotProps> = ({ openLoopRoots, closedLoopRoots, desiredRoots, zeta }) => {
+const PoleZeroPlot: React.FC<PoleZeroPlotProps> = ({ openLoopRoots, closedLoopRoots, desiredRoots, zeta, m, l }) => {
   // Track history of closed loop roots for trajectory
   const [clHistory, setClHistory] = useState<{ x: number, y: number, id: number }[][]>([]);
   const historyLimit = 15;
@@ -47,34 +49,38 @@ const PoleZeroPlot: React.FC<PoleZeroPlotProps> = ({ openLoopRoots, closedLoopRo
   const allPoints = [...data.olData, ...data.clData, ...data.dData];
   
   const domain = useMemo(() => {
-    if (allPoints.length === 0) return { x: [-10, 10], y: [-10, 10] };
+    // Only recalculate when mass or length changes to keep axes stable during tuning
+    const points = [
+      ...(openLoopRoots || []).map(r => ({ x: r.real, y: r.imag })),
+      ...(closedLoopRoots || []).map(r => ({ x: r.real, y: r.imag })),
+      ...(desiredRoots || []).map(r => ({ x: r.real, y: r.imag }))
+    ];
+
+    if (points.length === 0) return { x: [-10, 10], y: [-10, 10] };
     
-    const minX = Math.min(...allPoints.map(p => p.x), -1);
-    const maxX = Math.max(...allPoints.map(p => p.x), 1);
-    const minY = Math.min(...allPoints.map(p => p.y), -1);
-    const maxY = Math.max(...allPoints.map(p => p.y), 1);
+    const minX = Math.min(...points.map(p => p.x), -1);
+    const maxX = Math.max(...points.map(p => p.x), 1);
+    const minY = Math.min(...points.map(p => p.y), -1);
+    const maxY = Math.max(...points.map(p => p.y), 1);
     
     const maxAbs = Math.max(
       Math.abs(minX), Math.abs(maxX),
       Math.abs(minY), Math.abs(maxY),
-      5 // Minimum scale
+      10 // Minimum scale
     );
 
-    // Pick a stable scale from predefined steps
-    // We use a larger margin (1.25) to prevent frequent jumping
-    const steps = [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000];
-    const scale = steps.find(s => s >= maxAbs * 1.25) || steps[steps.length - 1];
+    // Pick a stable scale from predefined steps, but cap it at 50 as requested
+    const steps = [10, 20, 25, 50];
+    const scale = steps.find(s => s >= maxAbs * 1.2) || 50;
     
     return {
       x: [-scale, scale],
       y: [-scale, scale]
     };
-  }, [allPoints]);
+  }, [m, l]); // Only depend on m and l
 
   const formatTick = (value: number) => {
-    if (value === 0) return '0';
-    if (Math.abs(value) >= 1000) return value.toExponential(0);
-    return value.toString();
+    return Math.round(value).toString();
   };
 
   // Constant damping line (zeta line)
@@ -116,7 +122,7 @@ const PoleZeroPlot: React.FC<PoleZeroPlotProps> = ({ openLoopRoots, closedLoopRo
               tick={{ fontSize: 9 }}
               tickFormatter={formatTick}
               stroke="#ccc"
-              allowDataOverflow={false}
+              allowDataOverflow={true}
             />
             <YAxis 
               type="number" 
@@ -126,7 +132,7 @@ const PoleZeroPlot: React.FC<PoleZeroPlotProps> = ({ openLoopRoots, closedLoopRo
               tick={{ fontSize: 9 }}
               tickFormatter={formatTick}
               stroke="#ccc"
-              allowDataOverflow={false}
+              allowDataOverflow={true}
             />
             <ZAxis type="number" range={[40, 40]} />
             <Tooltip 

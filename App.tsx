@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
-import { SystemParams, PidParams, SimulationControl, Equations, DisturbanceParams, PerformanceMetrics, ComplexRoot, ReferenceInputType, SinusoidParams, ComparisonRun, PidSourceType } from './types';
+import { SystemParams, PidParams, SimulationControl, Equations, DisturbanceParams, PerformanceMetrics, ComplexRoot, ReferenceInputType, SinusoidParams, ComparisonRun, PidSourceType, ControlMode, ZetaWnParams, PerformanceDesignParams } from './types';
 import { GRAVITY, DEFAULT_DISTURBANCE_PARAMS, DEFAULT_SINUSOID_PARAMS, DEFAULT_DESIRED_ZETA, DEFAULT_DESIRED_TS, POLE_PLACEMENT_THIRD_POLE_ALPHA, SIMULATION_MAX_TIME, ZN_C1_KU, ZN_C2_TU } from './constants';
 import ControlPanel from './components/ControlPanel';
 import SystemInfoDisplay from './components/SystemInfoDisplay';
@@ -30,6 +30,10 @@ const App: React.FC = () => {
 
   const [lastPidSource, setLastPidSource] = useState<PidSourceType>('manual');
   const [comparisonRuns, setComparisonRuns] = useState<ComparisonRun[]>([]);
+
+  const [controlMode, setControlMode] = useState<ControlMode>('pid');
+  const [zetaWnParams, setZetaWnParams] = useState<ZetaWnParams>({ zeta: 0.707, wn: 5 });
+  const [performanceDesignParams, setPerformanceDesignParams] = useState<PerformanceDesignParams>({ tr: 0.5, ts: 2, mp: 5 });
 
   const handleSystemParamChange = useCallback(<K extends keyof SystemParams,>(param: K, value: SystemParams[K]) => {
     setSystemParams(prev => ({ ...prev, [param]: value }));
@@ -72,6 +76,19 @@ const App: React.FC = () => {
     } else {
       setDesiredTs(value);
     }
+  }, []);
+
+  const handleZetaWnParamChange = useCallback((param: keyof ZetaWnParams, value: number) => {
+    setZetaWnParams(prev => ({ ...prev, [param]: value }));
+  }, []);
+
+  const handlePerformanceDesignParamChange = useCallback((param: keyof PerformanceDesignParams, value: number) => {
+    setPerformanceDesignParams(prev => ({ ...prev, [param]: value }));
+  }, []);
+
+  const handleControlModeChange = useCallback((mode: ControlMode) => {
+    setControlMode(mode);
+    setIsRunning(false);
   }, []);
 
   const clampPidParams = (kp: number, ki: number, kd: number): PidParams => {
@@ -182,9 +199,130 @@ const App: React.FC = () => {
     setComparisonRuns([]);
   }, []);
 
+  const equations = useMemo<Equations>(() => {
+    const { m, l, b } = systemParams;
+    const { kp, ki, kd } = pidParams;
+    
+    const m_val = Math.max(0.001, m); 
+    const l_val = Math.max(0.001, l);
+    const b_val = Math.max(0, b);
+
+    const I_val = m_val * l_val * l_val;
+    const mgl_val = m_val * GRAVITY * l_val;
+
+    // Determine PID based on mode
+    let activeKp = pidParams.kp;
+    let activeKi = pidParams.ki;
+    let activeKd = pidParams.kd;
+
+    if (controlMode === 'zeta_wn') {
+      const { zeta, wn } = zetaWnParams;
+      activeKp = wn * wn * I_val + mgl_val;
+      activeKi = 0;
+      activeKd = 2 * zeta * wn * I_val - b_val;
+    } else if (controlMode === 'performance') {
+      const zetaFromMp = performanceDesignParams.mp > 0 
+        ? Math.sqrt(Math.pow(Math.log(performanceDesignParams.mp / 100), 2) / (Math.PI * Math.PI + Math.pow(Math.log(performanceDesignParams.mp / 100), 2)))
+        : 1.0;
+      const sigma = 4.0 / performanceDesignParams.ts;
+      const wn = sigma / zetaFromMp;
+      
+      activeKp = wn * wn * I_val + mgl_val;
+      activeKi = 0;
+      activeKd = 2 * zetaFromMp * wn * I_val - b_val;
+    } else if (controlMode === 'unit_feedback') {
+      // For unit feedback, we'll use the pidParams which will be set by the fixed examples
+      activeKp = pidParams.kp;
+      activeKi = pidParams.ki;
+      activeKd = pidParams.kd;
+    }
+
+    const activePid = { kp: activeKp, ki: activeKi, kd: activeKd };
+
+    // Helper to format polynomial terms
+    const formatTerm = (val: number, term: string, isFirst: boolean = false) => {
+      if (Math.abs(val) < 1e-6) return "";
+      const sign = val > 0 ? (isFirst ? "" : " + ") : " - ";
+      const absVal = Math.abs(val).toFixed(3);
+      return `${sign}${absVal}${term}`;
+    };
+
+    // LaTeX formatted equations
+    const timeDomain = `${I_val.toFixed(3)} \\ddot{\\theta}(t) + ${b_val.toFixed(3)} \\dot{\\theta}(t) - ${mgl_val.toFixed(3)} \\theta(t) = \\tau_{control}(t)`;
+    
+    const plantDenominator = `${I_val.toFixed(3)}s^2${formatTerm(b_val, "s")}${formatTerm(-mgl_val, "")}`;
+    const plantTransferFunction = `G_p(s) = \\frac{1}{${plantDenominator}}`;
+
+    const controllerTransferFunctionNumerator = `${activeKd.toFixed(3)}s^2${formatTerm(activeKp, "s")}${formatTerm(activeKi, "")}`;
+    const controllerTransferFunction = `G_c(s) = \\frac{${controllerTransferFunctionNumerator}}{s}`;
+    
+    const clNumerator = controllerTransferFunctionNumerator; 
+    
+    const d3 = I_val;
+    const d2 = b_val + activeKd;
+    const d1 = activeKp - mgl_val;
+    const d0 = activeKi;
+
+    const clDenominator = `${d3.toFixed(3)}s^3${formatTerm(d2, "s^2")}${formatTerm(d1, "s")}${formatTerm(d0, "")}`;
+    const closedLoopTransferFunction = `T(s) = \\frac{${clNumerator}}{${clDenominator}}`;
+    
+    let openLoopWn_val: number | undefined = undefined;
+    let openLoopZeta_val: number | undefined = undefined;
+
+    if (l_val > 0 && GRAVITY > 0 && mgl_val > 0) { // mgl_val > 0 condition to avoid sqrt of negative
+        openLoopWn_val = Math.sqrt(mgl_val / I_val); // Corrected formula based on Gp(s) form: I s^2 + b s - mgl. For char eq I s^2 + b s - mgl = 0
+                                                   // If Gp(s) is 1/(Is^2+bs-mgl), roots are (-b +/- sqrt(b^2+4Imgl))/(2I)
+                                                   // This implies the "natural frequency" if it were stable is complex.
+                                                   // The definition of wn and zeta is typically for stable 2nd order systems.
+                                                   // For 1/(s^2 + 2zwns + wn^2), wn=sqrt(k/m), z=b/(2sqrt(km))
+                                                   // Here, it's unstable. Let's use sqrt(abs(mgl/I)) as a characteristic frequency magnitude.
+        openLoopWn_val = Math.sqrt(Math.abs(mgl_val / I_val));
+        if (m_val > 0 && openLoopWn_val > 0 && I_val > 0 ) {
+            openLoopZeta_val = b_val / (2 * I_val * openLoopWn_val); // b / (2 * I * wn)
+            if (mgl_val < 0) openLoopZeta_val = -openLoopZeta_val; // To indicate instability if "spring" term is negative
+            if (isNaN(openLoopZeta_val)) openLoopZeta_val = undefined;
+        }
+    } else {
+      openLoopWn_val = undefined;
+      openLoopZeta_val = undefined;
+    }
+
+
+    const openLoopRoots_val: ComplexRoot[] = solveQuadratic(I_val, b_val, -mgl_val);
+    const closedLoopRoots_val: ComplexRoot[] = solveCubic(
+      I_val,
+      b_val + activeKd,
+      activeKp - mgl_val,
+      activeKi
+    );
+
+    // Calculate desired roots for visualization
+    const sigma = 4.0 / desiredTs;
+    const wn_desired = sigma / desiredZeta;
+    const wd = wn_desired * Math.sqrt(Math.max(0, 1 - desiredZeta * desiredZeta));
+    const desiredRoots_val: ComplexRoot[] = [
+      { real: -sigma, imag: wd },
+      { real: -sigma, imag: -wd },
+      { real: -POLE_PLACEMENT_THIRD_POLE_ALPHA * sigma, imag: 0 }
+    ];
+    
+    return { 
+      timeDomain, 
+      plantTransferFunction, 
+      controllerTransferFunction,
+      closedLoopTransferFunction,
+      openLoopWn: openLoopWn_val,
+      openLoopZeta: openLoopZeta_val,
+      openLoopRoots: openLoopRoots_val,
+      closedLoopRoots: closedLoopRoots_val,
+      desiredRoots: desiredRoots_val,
+      activePid,
+    };
+  }, [systemParams, pidParams, desiredZeta, desiredTs, controlMode, zetaWnParams, performanceDesignParams]);
+
   const { simulationData: liveSimulationData, currentAngle, resetSimulationState, currentPidContributions } = usePendulumSimulation({
     systemParams,
-    pidParams,
+    pidParams: equations.activePid,
     simulationControl,
     isRunning,
     setIsRunning, 
@@ -220,97 +358,6 @@ const App: React.FC = () => {
     setPerformanceMetrics(null); 
   };
   
-  const equations = useMemo<Equations>(() => {
-    const { m, l, b } = systemParams;
-    const { kp, ki, kd } = pidParams;
-    
-    const m_val = Math.max(0.001, m); 
-    const l_val = Math.max(0.001, l);
-    const b_val = Math.max(0, b);
-
-    // Helper to format polynomial terms
-    const formatTerm = (val: number, term: string, isFirst: boolean = false) => {
-      if (Math.abs(val) < 1e-6) return "";
-      const sign = val > 0 ? (isFirst ? "" : " + ") : " - ";
-      const absVal = Math.abs(val).toFixed(3);
-      return `${sign}${absVal}${term}`;
-    };
-
-    const I_val = m_val * l_val * l_val;
-    const mgl_val = m_val * GRAVITY * l_val;
-
-    // LaTeX formatted equations
-    const timeDomain = `${I_val.toFixed(3)} \\ddot{\\theta}(t) + ${b_val.toFixed(3)} \\dot{\\theta}(t) - ${mgl_val.toFixed(3)} \\theta(t) = \\tau_{control}(t)`;
-    
-    const plantDenominator = `${I_val.toFixed(3)}s^2${formatTerm(b_val, "s")}${formatTerm(-mgl_val, "")}`;
-    const plantTransferFunction = `G_p(s) = \\frac{1}{${plantDenominator}}`;
-
-    const controllerTransferFunctionNumerator = `${kd.toFixed(3)}s^2${formatTerm(kp, "s")}${formatTerm(ki, "")}`;
-    const controllerTransferFunction = `G_c(s) = \\frac{${controllerTransferFunctionNumerator}}{s}`;
-    
-    const clNumerator = controllerTransferFunctionNumerator; 
-    
-    const d3 = I_val;
-    const d2 = b_val + kd;
-    const d1 = kp - mgl_val;
-    const d0 = ki;
-
-    const clDenominator = `${d3.toFixed(3)}s^3${formatTerm(d2, "s^2")}${formatTerm(d1, "s")}${formatTerm(d0, "")}`;
-    const closedLoopTransferFunction = `T(s) = \\frac{${clNumerator}}{${clDenominator}}`;
-    
-    let openLoopWn_val: number | undefined = undefined;
-    let openLoopZeta_val: number | undefined = undefined;
-
-    if (l_val > 0 && GRAVITY > 0 && mgl_val > 0) { // mgl_val > 0 condition to avoid sqrt of negative
-        openLoopWn_val = Math.sqrt(mgl_val / I_val); // Corrected formula based on Gp(s) form: I s^2 + b s - mgl. For char eq I s^2 + b s - mgl = 0
-                                                   // If Gp(s) is 1/(Is^2+bs-mgl), roots are (-b +/- sqrt(b^2+4Imgl))/(2I)
-                                                   // This implies the "natural frequency" if it were stable is complex.
-                                                   // The definition of wn and zeta is typically for stable 2nd order systems.
-                                                   // For 1/(s^2 + 2zwns + wn^2), wn=sqrt(k/m), z=b/(2sqrt(km))
-                                                   // Here, it's unstable. Let's use sqrt(abs(mgl/I)) as a characteristic frequency magnitude.
-        openLoopWn_val = Math.sqrt(Math.abs(mgl_val / I_val));
-        if (m_val > 0 && openLoopWn_val > 0 && I_val > 0 ) {
-            openLoopZeta_val = b_val / (2 * I_val * openLoopWn_val); // b / (2 * I * wn)
-            if (mgl_val < 0) openLoopZeta_val = -openLoopZeta_val; // To indicate instability if "spring" term is negative
-            if (isNaN(openLoopZeta_val)) openLoopZeta_val = undefined;
-        }
-    } else {
-      openLoopWn_val = undefined;
-      openLoopZeta_val = undefined;
-    }
-
-
-    const openLoopRoots_val: ComplexRoot[] = solveQuadratic(I_val, b_val, -mgl_val);
-    const closedLoopRoots_val: ComplexRoot[] = solveCubic(
-      I_val,
-      b_val + kd,
-      kp - mgl_val,
-      ki
-    );
-
-    // Calculate desired roots for visualization
-    const sigma = 4.0 / desiredTs;
-    const wn_desired = sigma / desiredZeta;
-    const wd = wn_desired * Math.sqrt(Math.max(0, 1 - desiredZeta * desiredZeta));
-    const desiredRoots_val: ComplexRoot[] = [
-      { real: -sigma, imag: wd },
-      { real: -sigma, imag: -wd },
-      { real: -POLE_PLACEMENT_THIRD_POLE_ALPHA * sigma, imag: 0 }
-    ];
-    
-    return { 
-      timeDomain, 
-      plantTransferFunction, 
-      controllerTransferFunction,
-      closedLoopTransferFunction,
-      openLoopWn: openLoopWn_val,
-      openLoopZeta: openLoopZeta_val,
-      openLoopRoots: openLoopRoots_val,
-      closedLoopRoots: closedLoopRoots_val,
-      desiredRoots: desiredRoots_val,
-    };
-  }, [systemParams, pidParams, desiredZeta, desiredTs]);
-
   return (
     <div className="min-h-screen bg-gray-50 p-2 md:p-4">
       <header className="mb-4 text-center">
@@ -346,6 +393,12 @@ const App: React.FC = () => {
             onClearComparisonRuns={handleClearComparisonRuns}
             comparisonRunCount={comparisonRuns.length}
             maxSimulationTime={SIMULATION_MAX_TIME}
+            controlMode={controlMode}
+            onControlModeChange={handleControlModeChange}
+            zetaWnParams={zetaWnParams}
+            onZetaWnParamChange={handleZetaWnParamChange}
+            performanceDesignParams={performanceDesignParams}
+            onPerformanceDesignParamChange={handlePerformanceDesignParamChange}
           />
         </div>
 
@@ -359,6 +412,8 @@ const App: React.FC = () => {
                 closedLoopRoots={equations.closedLoopRoots} 
                 desiredRoots={equations.desiredRoots}
                 zeta={desiredZeta}
+                m={systemParams.m}
+                l={systemParams.l}
               />
             </div>
             

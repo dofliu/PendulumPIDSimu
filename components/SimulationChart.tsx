@@ -33,7 +33,7 @@ const SimulationChart: React.FC<SimulationChartProps> = ({ liveSimulationData, c
               dataKey="time" 
               type="number" 
               tick={{ fontSize: 10 }}
-              domain={['dataMin', 'dataMax']}
+              domain={[0, 10]}
               stroke="#999"
             />
             <YAxis 

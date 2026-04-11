@@ -63,6 +63,7 @@ export interface Equations {
   openLoopRoots?: ComplexRoot[];
   closedLoopRoots?: ComplexRoot[];
   desiredRoots?: ComplexRoot[];
+  activePid: PidParams;
 }
 
 export interface PerformanceMetrics {
@@ -82,6 +83,19 @@ export interface PidContributions {
 }
 
 export type PidSourceType = 'manual' | 'zn' | 'pole';
+
+export type ControlMode = 'unit_feedback' | 'zeta_wn' | 'performance' | 'pid';
+
+export interface PerformanceDesignParams {
+  tr: number;
+  ts: number;
+  mp: number;
+}
+
+export interface ZetaWnParams {
+  zeta: number;
+  wn: number;
+}
 
 export interface ComparisonRun {
   id: string; // Unique ID for the run, e.g., timestamp or uuid
